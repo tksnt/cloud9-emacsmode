@@ -10,14 +10,20 @@ var menus = require("ext/menus/menus");
 var extmgr = require("ext/extmgr/extmgr");
 var save = require("ext/save/save");
 var tabbehaviors = require("ext/tabbehaviors/tabbehaviors");
-var searchreplace = require("ext/searchreplace/searchreplace");
+var quicksearch = require("ext/quicksearch/quicksearch");
+var Search = require("ace/search").Search;
 var c9console = require("ext/console/console");
 
+var DEBUG_MODE = false;
 var EMACS_ENABLED = false;
-var IS_LOADING = false;
-var IS_SEARCHING = false;
+var IS_LOADING    = false;
+var IS_SEARCHING  = false;
+var IS_KILLING    = false;
+
+var lastPosition = null;
 var previousPage = null;
 var emacsHandler = null;
+var killRing = null;
 
 var markupSettings = function(){/*
 <a:application xmlns:a="http://ajax.org/2005/aml">
@@ -26,6 +32,7 @@ var markupSettings = function(){/*
 */}.toString().split(/\n/).slice(1,-1).join("\n");
 
 exports.searchStore = {
+    markers: [],
     current: "",
     options: {
         needle: "",
@@ -34,11 +41,53 @@ exports.searchStore = {
         caseSensitive: false,
         wholeWord: false,
         regExp: false,
-        start: null
+        start: null,
+        scope: Search.ALL
     }
 };
 
+var debug_log = function(text) {
+    if (DEBUG_MODE)
+        c9console.log(text + "<br/>");
+};
+
+var clearMarkers = function() {
+    var ed = code.amlEditor.$editor;
+    var options = exports.searchStore;
+    options.markers.forEach(function(marker) {
+        ed.session.removeMarker(marker);
+    });
+    options.markers = [];
+};
+
+var execFind = function(options) {
+    var ed = code.amlEditor.$editor;
+    clearMarkers();
+    ed.find(options.current, options);
+    ed.selection.setSelectionRange(ed.selection.getRange(), !options.backwards);
+    options.start = null;
+    ed.$search.set(options);
+    var ranges = ed.$search.findAll(ed.getSession());
+    ranges.forEach(function(range) {
+        options.markers.push(ed.session.addMarker(range, "ace_bracket", "text"));
+    });
+    if (ranges.length === 0) {
+        IS_SEARCHING = false;
+        options.current = "";
+    }
+};
+
+var cancelAllModes = function() {
+    IS_SEARCHING = false;
+    clearMarkers();
+    IS_KILLING = false;
+};
+
 var addBindings = function(handler) {
+    killRing.append = function(text) {
+        killRing.$data[killRing.$data.length - 1] += text;
+    };
+    
     handler.addCommands({
         save : function(editor) {
             var page = tabEditors.getPage();
@@ -46,7 +95,7 @@ var addBindings = function(handler) {
                 return;
             
             save.quicksave(null, function() {
-                //c9console.log(page.name + " saved.\n");
+                //
             });
         },
         saveas : function(editor) {
@@ -70,25 +119,47 @@ var addBindings = function(handler) {
             tabbehaviors.showTab(tabNum+1);
         },
         incrementalsearch : function(editor, dir) {
-//            c9console.log("INCREMENTAL<br />");
             var ed = code.amlEditor.$editor;
             var options = exports.searchStore;
             options.backwards = (dir === "backward");
+
+            if (options.current != "")
+                IS_SEARCHING = true;
             if (IS_SEARCHING) {
-//                c9console.log("SEARCH: " + options.current + "<br />");
-                var cur = ed.getCursorPosition();
+                debug_log("SEARCH<br/>");
                 var options = exports.searchStore;
                 options.start = null;
-                ed.find(options.current, options);
-//                ed.selection.setSelectionRange(ed.selection.getRange(), !options.backwards);
-//                ed.find(options.current, options);
-                ed.selection.setSelectionRange(ed.selection.getRange(), !options.backwards);
+                execFind(options);
             }
             else {
-//                c9console.log("SEARCH START<br />");
+                debug_log("SEARCH START<br/>");
+                lastPosition = ed.getCursorPosition();
+                ed.selection.setSelectionRange(ed.selection.getRange(), !options.backwards);
                 IS_SEARCHING = true;
-                options.current = "";
             }
+        },
+        yank: function(editor) {
+            editor.onPaste(killRing.get());
+            killRing.$data.lastCommand = "yank";
+        },
+        killLine : function(editor) {
+            editor.selection.selectLineEnd();
+            var range = editor.getSelectionRange();
+            if (range.isEmpty()) {
+                editor.selection.selectRight();
+                range = editor.getSelectionRange();
+            }
+            var text = editor.session.getTextRange(range);
+            if (IS_KILLING) {
+                killRing.append(text);
+            }
+            else {
+                IS_KILLING = true;
+                killRing.add(text);
+            }
+    
+            editor.session.remove(range);
+            editor.clearSelection();
         }
     });
     
@@ -100,6 +171,7 @@ var addBindings = function(handler) {
         "c-x c-w" : "saveas",
         "c-x c-b" : "listEditors",
         "c-x b" : "prevEditor",
+        "c-space" : "complete"
     });
 }
 
@@ -136,36 +208,55 @@ var enableEmacs = function() {
         
         if (emacsHandler) {
             editor.setKeyboardHandler(emacsHandler);
-            editor.on("emacsMode", emacsHandler.$statusListener);
+            //editor.on("emacsMode", emacsHandler.$statusListener);
             ide.dispatchEvent("track_action", {type: "emacs", action: "enable", mode: "normal"});
-            require("ext/console/console").showInput();
+            //require("ext/console/console").showInput();
         }
         else {
             if (IS_LOADING) return;
             IS_LOADING = true;
             
             _loadKeyboardHandler("ace/keyboard/emacs", function(module) {
+                killRing = module.killRing;
                 emacsHandler = module.handler;
                 emacsHandler._handleKeyboard = emacsHandler.handleKeyboard;
                 emacsHandler.handleKeyboard = function(data, hashId, key, keyCode) {
-                    var _result = emacsHandler._handleKeyboard(data, hashId, key, keyCode);
-                    if (IS_SEARCHING) {
-                        var searchKeys = ["s", "r"];
+                    if (IS_KILLING) {
+                        var ignoreKeys = ["", "\x00", "k"];
                         var endKeys = ["up", "down", "left", "right", "home", "end", "pageup", "pagedown", "esc", "return"];
-                        if ( (hashId > 0 && (key != "" && key != "\x00" && searchKeys.indexOf(key) == -1) || endKeys.indexOf(key) != -1)) {
-                            IS_SEARCHING = false;
-//                            c9console.log("SEARCH END<br />");
+                        if ( ((hashId & (1|8|2)) && ignoreKeys.indexOf(key) == -1) || endKeys.indexOf(key) != -1 ) {
+                            IS_KILLING = false;
                         }
-                        else if (hashId == 0) {
-//                            c9console.log("KEY:" + key + "<br />");
-                            var ed = code.amlEditor.$editor;
-                            var cur = ed.getCursorPosition();
+                    }
+                    
+                    if (IS_SEARCHING) {
+                        var ignoreKeys = ["", "\x00", "s", "r"];
+                        var endKeys = ["up", "down", "left", "right", "home", "end", "pageup", "pagedown", "esc", "return"];
+                        
+                        if ( ( (hashId & (1|8|2)) && ignoreKeys.indexOf(key) == -1 ) || endKeys.indexOf(key) != -1 ) {
+                            IS_SEARCHING = false;
+                            clearMarkers();
+                            debug_log("SEARCH END<br/>");
+                            if (hashId == 1 && key == "g") {
+                                debug_log("CLEAR SEARCH TEXT<br/>");
+                                exports.searchStore.current = "";
+                                if (lastPosition) {
+                                    debug_log("RESTORE POSITION<br/>");
+                                    debug_log("POS: " + JSON.stringify(lastPosition));
+                                    editor.clearSelection();
+                                    editor.moveCursorToPosition(lastPosition);
+                                    lastPosition = null;
+                                }
+                            }
+                        }
+                        else if ( (hashId == 0 || hashId == 4) && key != "" && key != "\x00") {
+                            debug_log("KEY: " + key + "<br/>");
+                            var cur = editor.getCursorPosition();
                             var options = exports.searchStore;
                             options.current += key;
-                            options.start = {row: cur.row, column: cur.column-(options.backwards ? -1 : 1)};
-//                            c9console.log("current search: " + options.current + "<br />");
-                            ed.find(options.current, options);
-                            ed.selection.setSelectionRange(ed.selection.getRange(), !options.backwards);
+                            debug_log("SEARCHING: " + options.current + "<br/>");
+                            options.start = {row: cur.row, column: cur.column}; //-(options.backwards ? -1 : 1)};
+                            execFind(options);
 
                             return {command:"null"};
                         }
@@ -174,16 +265,18 @@ var enableEmacs = function() {
                         //
                     }
                     
-                    return _result;
+                    return emacsHandler._handleKeyboard(data, hashId, key, keyCode);
                 };
                 emacsHandler.$statusListener = function(mode) {
                     ide.dispatchEvent("emacs.changeMode", { mode : "mode" });
                 };
                 editor.setKeyboardHandler(emacsHandler);
                 addBindings(emacsHandler);
-                editor.on("emacsMode", emacsHandler.$statusListener);
+                //editor.on("emacsMode", emacsHandler.$statusListener);
                 ide.dispatchEvent("track_action", {type: "emacs", action: "enable", mode: "normal"});
-            })
+            });
+            
+            editor.on("click", cancelAllModes);
         }
     });
 };
@@ -192,7 +285,8 @@ var disableEmacs = function() {
     var editor = code.amlEditor.$editor;
     if (editor) {
         editor.keyBinding.removeKeyboardHandler(emacsHandler);
-        editor.removeEventListener("emacsMode", emacsHandler.$statusListener);
+//        editor.removeEventListener("emacsMode", emacsHandler.$statusListener);
+        editor.removeEventListener("click", cancelAllModes);
     }
     ide.dispatchEvent("track_action", { type: "emacs", action: "disable" });
     EMACS_ENABLED = false;
@@ -200,9 +294,9 @@ var disableEmacs = function() {
 
 module.exports = ext.register("ext/emacs/emacs", {
     name  : "Emacs mode",
-    dev   : "tksnt.com",
+    dev   : "tksnt",
     type  : ext.GENERAL,
-    deps  : [editors, code, settings, extmgr, save, tabbehaviors, searchreplace],
+    deps  : [editors, code, settings, extmgr, save, tabbehaviors, quicksearch],
     nodes : [],
     alone : true,
     
