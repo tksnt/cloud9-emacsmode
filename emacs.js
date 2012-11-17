@@ -115,53 +115,50 @@ var handlerMixin = {
     },
     
     handleKeyboard : function(data, hashId, key, keyCode) {
-        debug_log("hashId:" + hashId + " key:"+key+" keyCode:"+keyCode+"<br/>");
         var editor = code.amlEditor.$editor;
         var ignoreKeys = [];
+        var isMod = hashId & (1|8|2);
+        
         if (IS_KILLING) {
             ignoreKeys = ["", "\x00", "k"];
-            if ( ((hashId & (1|8|2)) && ignoreKeys.indexOf(key) == -1) || this.isMovingKey(key) ) {
+            if ( (isMod && ignoreKeys.indexOf(key) == -1) || this.isMovingKey(key) ) {
                 IS_KILLING = false;
             }
         }
         
         if (IS_SEARCHING) {
             ignoreKeys = ["", "\x00", "s", "r"];
-            if ( ( hashId != -1 && (hashId & (1|8|2)) && ignoreKeys.indexOf(key) == -1 ) || this.isMovingKey(key) ) {
-                debug_log("HASHID:"+hashId);
-                IS_SEARCHING = false;
-                clearMarkers();
-                exports.searchStore.previous = exports.searchStore.current;
-                exports.searchStore.current = "";
-                debug_log("SEARCH END<br/>");
-                if (hashId == 1 && key == "g") {
-                    debug_log("CLEAR SEARCH TEXT<br/>");
-                    if (lastPosition) {
-                        debug_log("RESTORE POSITION<br/>");
-                        debug_log("POS: " + JSON.stringify(lastPosition));
-                        editor.clearSelection();
-                        editor.moveCursorToPosition(lastPosition);
-                        lastPosition = null;
-                    }
-                }
-                else {
-                    lastPosition = null;
-                }
-            }
-            else if ( (hashId == -1) && !this.isNoopKey(key)) {
-                debug_log("key:"+key+" code:"+keyCode);
+            
+            if ( (hashId == -1) && !this.isNoopKey(key)) {
                 var cur = editor.getCursorPosition();
                 var options = exports.searchStore;
+                
                 options.current += key;
-                debug_log("SEARCHING: " + options.current + "<br/>");
+                debug_log("SEARCHING: " + options.current);
                 options.start = {row: cur.row, column: cur.column-(options.backwards ? -1 : 1)};
                 execFind(options);
 
                 return {command:"insertstring", args: "", passEvent:false};
             }
-        }
-        else {
-            //
+            else if ( (isMod && ignoreKeys.indexOf(key) == -1 ) || this.isMovingKey(key) ) {
+                IS_SEARCHING = false;
+                clearMarkers();
+                
+                exports.searchStore.previous = exports.searchStore.current;
+                exports.searchStore.current = "";
+                
+                debug_log("SEARCH END");
+                if (hashId == 1 && key == "g") {
+                    debug_log("CLEAR SEARCH TEXT");
+                    if (lastPosition) {
+                        debug_log("RESTORE POSITION");
+                        debug_log("POS: " + JSON.stringify(lastPosition));
+                        editor.clearSelection();
+                        editor.moveCursorToPosition(lastPosition);
+                    }
+                }
+                lastPosition = null;
+            }
         }
         
         return this.handleKeyboard_(data, hashId, key, keyCode);
@@ -210,14 +207,14 @@ var addBindings = function(handler) {
             if (options.current != "")
                 IS_SEARCHING = true;
             if (IS_SEARCHING) {
-                debug_log("SEARCH<br/>");
+                debug_log("SEARCH REPEAT");
                 var options = exports.searchStore;
                 options.start = null;
                 if (options.current == "") options.current = options.previous;
                 execFind(options);
             }
             else {
-                debug_log("SEARCH START<br/>");
+                debug_log("SEARCH START");
 //                c9console.log("I-search:<br/>");
                 lastPosition = ed.getCursorPosition();
                 ed.selection.setSelectionRange(ed.selection.getRange(), !options.backwards);
