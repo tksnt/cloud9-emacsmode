@@ -20,10 +20,10 @@ var IS_LOADING    = false;
 var IS_SEARCHING  = false;
 var IS_KILLING    = false;
 
+var aceEmacs = null;
 var lastPosition = null;
 var previousPage = null;
 var emacsHandler = null;
-var killRing = null;
 
 var markupSettings = function(){/*
 <a:application xmlns:a="http://ajax.org/2005/aml">
@@ -34,6 +34,7 @@ var markupSettings = function(){/*
 exports.searchStore = {
     markers: [],
     current: "",
+    previous: "",
     options: {
         needle: "",
         backwards: false,
@@ -72,8 +73,11 @@ var execFind = function(options) {
         options.markers.push(ed.session.addMarker(range, "ace_bracket", "text"));
     });
     if (ranges.length === 0) {
-        IS_SEARCHING = false;
-        options.current = "";
+        c9console.log("Failing I-search: " + options.current.replace(/\&/, "&amp;").replace(/</, "&lt;") + "<br />");
+        setTimeout(function(){
+            IS_SEARCHING = false;
+            options.current = "";
+        }, 500);
     }
 };
 
@@ -83,11 +87,91 @@ var cancelAllModes = function() {
     IS_KILLING = false;
 };
 
-var addBindings = function(handler) {
-    killRing.append = function(text) {
-        killRing.$data[killRing.$data.length - 1] += text;
-    };
+var _mixin = function(source, mixins) {
+    for (var key in mixins) {
+        if (source[key])
+            source[key + "_"] = source[key];
+        
+        source[key] = mixins[key];
+    }
+    return source;
+};
+
+var killRingMixin = {
+    append : function(text) {
+        this.$data[this.$data.length-1] += text;
+    }
+};
+
+var handlerMixin = {
+    movingKeys : ["up", "down", "left", "right", "home", "end", "pageup", "pagedown", "esc", "return"],
     
+    isMovingKey : function(key) {
+        return this.movingKeys.indexOf(key) != -1
+    },
+    
+    isNoopKey : function(key) {
+        return ["", "\x00"].indexOf(key) != -1;
+    },
+    
+    handleKeyboard : function(data, hashId, key, keyCode) {
+        debug_log("hashId:" + hashId + " key:"+key+" keyCode:"+keyCode+"<br/>");
+        var editor = code.amlEditor.$editor;
+        var ignoreKeys = [];
+        if (IS_KILLING) {
+            ignoreKeys = ["", "\x00", "k"];
+            if ( ((hashId & (1|8|2)) && ignoreKeys.indexOf(key) == -1) || this.isMovingKey(key) ) {
+                IS_KILLING = false;
+            }
+        }
+        
+        if (IS_SEARCHING) {
+            ignoreKeys = ["", "\x00", "s", "r"];
+            if ( ( hashId != -1 && (hashId & (1|8|2)) && ignoreKeys.indexOf(key) == -1 ) || this.isMovingKey(key) ) {
+                debug_log("HASHID:"+hashId);
+                IS_SEARCHING = false;
+                clearMarkers();
+                exports.searchStore.previous = exports.searchStore.current;
+                exports.searchStore.current = "";
+                debug_log("SEARCH END<br/>");
+                if (hashId == 1 && key == "g") {
+                    debug_log("CLEAR SEARCH TEXT<br/>");
+                    if (lastPosition) {
+                        debug_log("RESTORE POSITION<br/>");
+                        debug_log("POS: " + JSON.stringify(lastPosition));
+                        editor.clearSelection();
+                        editor.moveCursorToPosition(lastPosition);
+                        lastPosition = null;
+                    }
+                }
+                else {
+                    lastPosition = null;
+                }
+            }
+            else if ( (hashId == -1) && !this.isNoopKey(key)) {
+                debug_log("key:"+key+" code:"+keyCode);
+                var cur = editor.getCursorPosition();
+                var options = exports.searchStore;
+                options.current += key;
+                debug_log("SEARCHING: " + options.current + "<br/>");
+                options.start = {row: cur.row, column: cur.column-(options.backwards ? -1 : 1)};
+                execFind(options);
+
+                return {command:"insertstring", args: "", passEvent:false};
+            }
+        }
+        else {
+            //
+        }
+        
+        return this.handleKeyboard_(data, hashId, key, keyCode);
+    },
+    $statusListener : function(mode) {
+        ide.dispatchEvent("emacs.changeMode", { mode : "mode" });
+    }
+};
+
+var addBindings = function(handler) {
     handler.addCommands({
         save : function(editor) {
             var page = tabEditors.getPage();
@@ -118,7 +202,7 @@ var addBindings = function(handler) {
             
             tabbehaviors.showTab(tabNum+1);
         },
-        incrementalsearch : function(editor, dir) {
+        isearch : function(editor, dir) {
             var ed = code.amlEditor.$editor;
             var options = exports.searchStore;
             options.backwards = (dir === "backward");
@@ -129,18 +213,20 @@ var addBindings = function(handler) {
                 debug_log("SEARCH<br/>");
                 var options = exports.searchStore;
                 options.start = null;
+                if (options.current == "") options.current = options.previous;
                 execFind(options);
             }
             else {
                 debug_log("SEARCH START<br/>");
+//                c9console.log("I-search:<br/>");
                 lastPosition = ed.getCursorPosition();
                 ed.selection.setSelectionRange(ed.selection.getRange(), !options.backwards);
                 IS_SEARCHING = true;
             }
         },
         yank: function(editor) {
-            editor.onPaste(killRing.get());
-            killRing.$data.lastCommand = "yank";
+            editor.onPaste(aceEmacs.killRing.get());
+            aceEmacs.killRing.$data.lastCommand = "yank";
         },
         killLine : function(editor) {
             editor.selection.selectLineEnd();
@@ -151,21 +237,22 @@ var addBindings = function(handler) {
             }
             var text = editor.session.getTextRange(range);
             if (IS_KILLING) {
-                killRing.append(text);
+                aceEmacs.killRing.append(text);
             }
             else {
                 IS_KILLING = true;
-                killRing.add(text);
+                aceEmacs.killRing.add(text);
             }
     
             editor.session.remove(range);
             editor.clearSelection();
-        }
+        },
+        noop: function(editor) {}
     });
     
     handler.bindKeys({
-        "c-s" : {command: "incrementalsearch", args: "forward"},
-        "c-r" : {command: "incrementalsearch", args: "backward"},
+        "c-s" : {command: "isearch", args: "forward"},
+        "c-r" : {command: "isearch", args: "backward"},
         "c-x s" : "save",
         "c-x c-s" : "save",
         "c-x c-w" : "saveas",
@@ -199,7 +286,7 @@ var _loadKeyboardHandler = function(path, callback) {
     }
 };
 
-var enableEmacs = function() {
+var _enableEmacs = function() {
     ext.initExtension(this);
     
     ide.addEventListener("init.ext/code/code", function(e){
@@ -217,59 +304,11 @@ var enableEmacs = function() {
             IS_LOADING = true;
             
             _loadKeyboardHandler("ace/keyboard/emacs", function(module) {
-                killRing = module.killRing;
-                emacsHandler = module.handler;
-                emacsHandler._handleKeyboard = emacsHandler.handleKeyboard;
-                emacsHandler.handleKeyboard = function(data, hashId, key, keyCode) {
-                    if (IS_KILLING) {
-                        var ignoreKeys = ["", "\x00", "k"];
-                        var endKeys = ["up", "down", "left", "right", "home", "end", "pageup", "pagedown", "esc", "return"];
-                        if ( ((hashId & (1|8|2)) && ignoreKeys.indexOf(key) == -1) || endKeys.indexOf(key) != -1 ) {
-                            IS_KILLING = false;
-                        }
-                    }
-                    
-                    if (IS_SEARCHING) {
-                        var ignoreKeys = ["", "\x00", "s", "r"];
-                        var endKeys = ["up", "down", "left", "right", "home", "end", "pageup", "pagedown", "esc", "return"];
-                        
-                        if ( ( (hashId & (1|8|2)) && ignoreKeys.indexOf(key) == -1 ) || endKeys.indexOf(key) != -1 ) {
-                            IS_SEARCHING = false;
-                            clearMarkers();
-                            debug_log("SEARCH END<br/>");
-                            if (hashId == 1 && key == "g") {
-                                debug_log("CLEAR SEARCH TEXT<br/>");
-                                exports.searchStore.current = "";
-                                if (lastPosition) {
-                                    debug_log("RESTORE POSITION<br/>");
-                                    debug_log("POS: " + JSON.stringify(lastPosition));
-                                    editor.clearSelection();
-                                    editor.moveCursorToPosition(lastPosition);
-                                    lastPosition = null;
-                                }
-                            }
-                        }
-                        else if ( (hashId == 0 || hashId == 4) && key != "" && key != "\x00") {
-                            debug_log("KEY: " + key + "<br/>");
-                            var cur = editor.getCursorPosition();
-                            var options = exports.searchStore;
-                            options.current += key;
-                            debug_log("SEARCHING: " + options.current + "<br/>");
-                            options.start = {row: cur.row, column: cur.column}; //-(options.backwards ? -1 : 1)};
-                            execFind(options);
-
-                            return {command:"null"};
-                        }
-                    }
-                    else {
-                        //
-                    }
-                    
-                    return emacsHandler._handleKeyboard(data, hashId, key, keyCode);
-                };
-                emacsHandler.$statusListener = function(mode) {
-                    ide.dispatchEvent("emacs.changeMode", { mode : "mode" });
-                };
+                aceEmacs = module;
+                _mixin(aceEmacs.killRing, killRingMixin);
+                _mixin(aceEmacs.handler, handlerMixin);
+                
+                emacsHandler = aceEmacs.handler;
                 editor.setKeyboardHandler(emacsHandler);
                 addBindings(emacsHandler);
                 //editor.on("emacsMode", emacsHandler.$statusListener);
@@ -281,7 +320,7 @@ var enableEmacs = function() {
     });
 };
 
-var disableEmacs = function() {
+var _disableEmacs = function() {
     var editor = code.amlEditor.$editor;
     if (editor) {
         editor.keyBinding.removeKeyboardHandler(emacsHandler);
@@ -344,7 +383,7 @@ module.exports = ext.register("ext/emacs/emacs", {
     
     enable : function(doEnable){
         if (doEnable !== false) {
-            enableEmacs.call(this);
+            _enableEmacs.call(this);
         }
         else {
             this.disable();
@@ -352,7 +391,7 @@ module.exports = ext.register("ext/emacs/emacs", {
     },
 
     disable : function(){
-        disableEmacs();
+        _disableEmacs();
     },
 
     destroy : function(){
