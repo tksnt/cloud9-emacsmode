@@ -232,10 +232,8 @@ var addBindings = function(handler) {
             save.saveas();
         },
         listEditors : function(editor) {
-            c9console.log("gotofile<br/>");
-//            gotofile.filter("", false, true);
             gotofile.toggleDialog();
-            c9console.log("gotofile2<br/>");
+            gotofile.filter("", false, true);
         },
         prevEditor : function(editor) {
             var pages = tabEditors.getPages();
