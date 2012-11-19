@@ -14,6 +14,7 @@ var quicksearch = require("ext/quicksearch/quicksearch");
 var Search = require("ace/search").Search;
 var Keys = require("ace/lib/keys");
 var statusbar = require("ext/statusbar/statusbar");
+var gotofile = require("ext/gotofile/gotofile");
 var c9console = require("ext/console/console");
 
 var DEBUG_MODE = false;
@@ -23,8 +24,6 @@ var IS_SEARCHING  = false;
 var IS_KILLING    = false;
 
 var aceEmacs = null;
-var markPosition = null;
-var lastPosition = null;
 var previousPage = null;
 var emacsHandler = null;
 var statusText   = "";
@@ -35,19 +34,66 @@ var markupSettings = function(){/*
 </a:application>
 */}.toString().split(/\n/).slice(1,-1).join("\n");
 
-exports.searchStore = {
-    markers: [],
-    current: "",
-    previous: "",
-    options: {
-        needle: "",
-        backwards: false,
-        wrap: true,
-        caseSensitive: false,
-        wholeWord: false,
-        regExp: false,
-        start: null,
-        scope: Search.ALL
+var searchStores = {};
+var getSearchStore = exports.getSearchStore = function() {
+    var page = tabEditors.getPage();
+    
+    if (page && searchStores[page.name])
+        return searchStores[page.name];
+    
+    var store = {
+        markers: [],
+        current: "",
+        previous: "",
+        options: {
+            needle: "",
+            backwards: false,
+            wrap: true,
+            caseSensitive: false,
+            wholeWord: false,
+            regExp: false,
+            start: null,
+            scope: Search.ALL
+        }
+    };
+    if (page) {
+        searchStores[page.name] = store;
+    }
+    return store;
+};
+
+var markPositions = {};
+var getMarkPosition = function() {
+    var page = tabEditors.getPage();
+    
+    if (page && markPositions[page.name]) {
+        return markPositions[page.name];
+    }
+
+    return null;
+};
+var setMarkPosition = function(pos) {
+    var page = tabEditors.getPage();
+    if (page) {
+        markPositions[page.name] = pos;
+    }
+};
+
+var lastPositions = {};
+var getLastPosition = function() {
+    var page = tabEditors.getPage();
+    
+    if (page && lastPositions[page.name]) {
+        return lastPositions[page.name];
+    }
+    
+    return null;
+};
+var setLastPosition = function(pos) {
+    var page = tabEditors.getPage();
+    
+    if (page) {
+        lastPositions[page.name] = pos;
     }
 };
 
@@ -58,7 +104,7 @@ var debug_log = function(text) {
 
 var clearMarkers = function() {
     var ed = code.amlEditor.$editor;
-    var options = exports.searchStore;
+    var options = getSearchStore();
     options.markers.forEach(function(marker) {
         ed.session.removeMarker(marker);
     });
@@ -176,7 +222,7 @@ var handlerMixin = {
             
             if ( (hashId == -1) && !this.isNoopKey(key)) {
                 var cur = editor.getCursorPosition();
-                var options = exports.searchStore;
+                var options = getSearchStore();
                 
                 options.current += key;
                 debug_log("SEARCHING: " + options.current);
@@ -189,20 +235,21 @@ var handlerMixin = {
                 IS_SEARCHING = false;
                 clearMarkers();
                 
-                exports.searchStore.previous = exports.searchStore.current;
-                exports.searchStore.current = "";
+                var store = getSearchStore();
+                store.previous = store.current;
+                store.current = "";
                 
                 debug_log("SEARCH END");
                 if (mods == "c-" && key == "g") {
                     debug_log("CLEAR SEARCH TEXT");
-                    if (lastPosition) {
+                    if (getLastPosition()) {
                         debug_log("RESTORE POSITION");
-                        debug_log("POS: " + JSON.stringify(lastPosition));
+                        debug_log("POS: " + JSON.stringify(getLastPosition()));
                         editor.clearSelection();
-                        editor.moveCursorToPosition(lastPosition);
+                        editor.moveCursorToPosition(getLastPosition());
                     }
                 }
-                lastPosition = null;
+                setLastPosition(null);
             }
         }
         
@@ -231,7 +278,8 @@ var addBindings = function(handler) {
             save.saveas();
         },
         listEditors : function(editor) {
-            //
+            gotofile.toggleDialog();
+            gotofile.filter("", false, true);
         },
         prevEditor : function(editor) {
             var pages = tabEditors.getPages();
@@ -246,7 +294,7 @@ var addBindings = function(handler) {
         },
         isearch : function(editor, dir) {
             var ed = code.amlEditor.$editor;
-            var options = exports.searchStore;
+            var options = getSearchStore();
             options.backwards = (dir === "backward");
 
             if (options.current !== "")
@@ -260,13 +308,13 @@ var addBindings = function(handler) {
             }
             else {
                 flashStatus("I-search: ");
-                lastPosition = ed.getCursorPosition();
+                setLastPosition(ed.getCursorPosition());
                 ed.selection.setSelectionRange(ed.selection.getRange(), !options.backwards);
                 IS_SEARCHING = true;
             }
         },
         yank: function(editor) {
-            markPosition = editor.getCursorPosition();
+            setMarkPosition(editor.getCursorPosition());
             editor.onPaste(aceEmacs.killRing.get());
             aceEmacs.killRing.$data.lastCommand = "yank";
         },
@@ -290,8 +338,9 @@ var addBindings = function(handler) {
             editor.clearSelection();
         },
         killRegion : function(editor) {
-            if (markPosition) {
-                editor.selection.selectToPosition(markPosition);
+            if (getMarkPosition()) {
+                editor.selection.clearSelection();
+                editor.selection.selectToPosition(getMarkPosition());
             }
             var range = editor.getSelectionRange();
             if (!range.isEmpty()) {
@@ -310,12 +359,13 @@ var addBindings = function(handler) {
         },
         setMark: function(editor) {
             flashStatus("Set Mark");
-            markPosition = editor.getCursorPosition();
+            setMarkPosition(editor.getCursorPosition());
         },
         exchangePointAndMark: function(editor) {
             var _point = editor.getCursorPosition();
-            editor.moveCursorToPosition(markPosition);
-            markPosition = _point;
+            editor.moveCursorToPosition(getMarkPosition());
+            editor.selection.clearSelection();
+            setMarkPosition(_point);
         },
         noop: function(editor) {}
     });
@@ -407,7 +457,7 @@ module.exports = ext.register("ext/emacs/emacs", {
     name  : "Emacs mode",
     dev   : "tksnt",
     type  : ext.GENERAL,
-    deps  : [editors, code, settings, extmgr, save, tabbehaviors, quicksearch, statusbar],
+    deps  : [editors, code, settings, extmgr, save, tabbehaviors, quicksearch, statusbar, gotofile],
     nodes : [],
     alone : true,
     
