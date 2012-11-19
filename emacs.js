@@ -118,20 +118,23 @@ var eMods = {
 
 var _flashTimeout = null;
 var flashStatus = function(text) {
-    window.lblEditorStatus.setAttribute("caption", text);
+    statusText = text;
+    window.lblEditorStatus.setAttribute("caption", statusText);
     if (_flashTimeout)
         clearTimeout(_flashTimeout);
     _flashTimeout = setTimeout(function(){
+        statusText = "";
         window.lblEditorStatus.setAttribute("caption", "");
     }, 2000);
 };
 
 var statusbarMixin = {
     updateStatus : function(ace) {
-        this._updateStatus(ace);
+        this.updateStatus_(ace);
         
         if (statusText !== "") {
-            window.lblEditorStatus.setAttribute("caption", statusText);
+            var origText = window.lblEditorStatus.getAttribute("caption");
+            window.lblEditorStatus.setAttribute("caption", statusText + " " + origText);
         }
     }
 };
@@ -263,6 +266,7 @@ var addBindings = function(handler) {
             }
         },
         yank: function(editor) {
+            markPosition = editor.getCursorPosition();
             editor.onPaste(aceEmacs.killRing.get());
             aceEmacs.killRing.$data.lastCommand = "yank";
         },
@@ -284,6 +288,25 @@ var addBindings = function(handler) {
     
             editor.session.remove(range);
             editor.clearSelection();
+        },
+        killRegion : function(editor) {
+            if (markPosition) {
+                editor.selection.selectToPosition(markPosition);
+            }
+            var range = editor.getSelectionRange();
+            if (!range.isEmpty()) {
+                var text = editor.session.getTextRange(range);
+                if (IS_KILLING) {
+                    aceEmacs.killRing.append(text);
+                }
+                else {
+                    IS_KILLING = true;
+                    aceEmacs.killRing.add(text);
+                }
+                
+                editor.session.remove(range);
+                editor.clearSelection();
+            }
         },
         setMark: function(editor) {
             flashStatus("Set Mark");
@@ -390,6 +413,8 @@ module.exports = ext.register("ext/emacs/emacs", {
     
     hook : function(){
         var self = this;
+        
+        // Add Emacs Menu
         var menuItem = new apf.item({
             type: "check",
             checked: "[{require('core/settings').model}::editors/code/@emacsmode]",
@@ -398,15 +423,20 @@ module.exports = ext.register("ext/emacs/emacs", {
 
         menus.addItemByPath("View/Emacs Mode", menuItem, 150000);
 
+        // Add Emacs Setting
         ide.addEventListener("settings.load", function(){
             settings.setDefaults("editors/code", [
                 ["emacsmode", "false"]
             ]);
         });
 
+        // Add Emacs Setting UI
         settings.addSettings("Code Editor", markupSettings);
+        
+        // Setting up Editor Status
         _mixin(statusbar, statusbarMixin);
 
+        // Add a listener to enable keybinding
         var tryEnabling = function () {
             if (settings.model) {
                 var sholdEnable = apf.isTrue(settings.model.queryNode("editors/code").getAttribute("emacsmode"));
@@ -416,6 +446,8 @@ module.exports = ext.register("ext/emacs/emacs", {
             }
         };
         ide.addEventListener("init.ext/code/code", tryEnabling);
+        
+        // Hook for tab tracking
         ide.addEventListener("tab.beforeswitch", function(data) { previousPage = data.previousPage; } );
     },
     
