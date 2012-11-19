@@ -14,6 +14,7 @@ var quicksearch = require("ext/quicksearch/quicksearch");
 var Search = require("ace/search").Search;
 var Keys = require("ace/lib/keys");
 var statusbar = require("ext/statusbar/statusbar");
+var gotofile = require("ext/gotofile/gotofile");
 var c9console = require("ext/console/console");
 
 var DEBUG_MODE = false;
@@ -231,7 +232,10 @@ var addBindings = function(handler) {
             save.saveas();
         },
         listEditors : function(editor) {
-            //
+            c9console.log("gotofile<br/>");
+//            gotofile.filter("", false, true);
+            gotofile.toggleDialog();
+            c9console.log("gotofile2<br/>");
         },
         prevEditor : function(editor) {
             var pages = tabEditors.getPages();
@@ -407,7 +411,7 @@ module.exports = ext.register("ext/emacs/emacs", {
     name  : "Emacs mode",
     dev   : "tksnt",
     type  : ext.GENERAL,
-    deps  : [editors, code, settings, extmgr, save, tabbehaviors, quicksearch, statusbar],
+    deps  : [editors, code, settings, extmgr, save, tabbehaviors, quicksearch, statusbar, gotofile],
     nodes : [],
     alone : true,
     
