@@ -12,6 +12,8 @@ var save = require("ext/save/save");
 var tabbehaviors = require("ext/tabbehaviors/tabbehaviors");
 var quicksearch = require("ext/quicksearch/quicksearch");
 var Search = require("ace/search").Search;
+var Keys = require("ace/lib/keys");
+var statusbar = require("ext/statusbar/statusbar");
 var c9console = require("ext/console/console");
 
 var DEBUG_MODE = false;
@@ -21,9 +23,11 @@ var IS_SEARCHING  = false;
 var IS_KILLING    = false;
 
 var aceEmacs = null;
+var markPosition = null;
 var lastPosition = null;
 var previousPage = null;
 var emacsHandler = null;
+var statusText   = "";
 
 var markupSettings = function(){/*
 <a:application xmlns:a="http://ajax.org/2005/aml">
@@ -62,8 +66,11 @@ var clearMarkers = function() {
 };
 
 var execFind = function(options) {
-    var ed = code.amlEditor.$editor;
     clearMarkers();
+    var searchHtml = options.current.replace(/\&/, "&amp;").replace(/</, "&lt;");
+    flashStatus("I-search: " + searchHtml);
+    
+    var ed = code.amlEditor.$editor;
     ed.find(options.current, options);
     ed.selection.setSelectionRange(ed.selection.getRange(), !options.backwards);
     options.start = null;
@@ -72,8 +79,9 @@ var execFind = function(options) {
     ranges.forEach(function(range) {
         options.markers.push(ed.session.addMarker(range, "ace_bracket", "text"));
     });
+    
     if (ranges.length === 0) {
-        c9console.log("Failing I-search: " + options.current.replace(/\&/, "&amp;").replace(/</, "&lt;") + "<br />");
+        flashStatus("Failing I-search: " + searchHtml);
         setTimeout(function(){
             IS_SEARCHING = false;
             options.current = "";
@@ -97,6 +105,37 @@ var _mixin = function(source, mixins) {
     return source;
 };
 
+var eMods = {
+    S: "shift", C: "ctrl", M: "alt"
+};
+["S-C-M", "S-C", "S-M", "C-M", "S", "C", "M"].forEach(function(c) {
+    var hashId = 0;
+    c.split("-").forEach(function(c){
+        hashId = hashId | Keys.KEY_MODS[eMods[c]];
+    });
+    eMods[hashId] = c.toLowerCase() + "-";
+});
+
+var _flashTimeout = null;
+var flashStatus = function(text) {
+    window.lblEditorStatus.setAttribute("caption", text);
+    if (_flashTimeout)
+        clearTimeout(_flashTimeout);
+    _flashTimeout = setTimeout(function(){
+        window.lblEditorStatus.setAttribute("caption", "");
+    }, 2000);
+};
+
+var statusbarMixin = {
+    updateStatus : function(ace) {
+        this._updateStatus(ace);
+        
+        if (statusText !== "") {
+            window.lblEditorStatus.setAttribute("caption", statusText);
+        }
+    }
+};
+
 var killRingMixin = {
     append : function(text) {
         this.$data[this.$data.length-1] += text;
@@ -117,7 +156,10 @@ var handlerMixin = {
     handleKeyboard : function(data, hashId, key, keyCode) {
         var editor = code.amlEditor.$editor;
         var ignoreKeys = [];
-        var isMod = hashId & (1|8|2);
+        var mods = eMods[hashId];
+        var isMod = (mods == "c-" || mods == "m-");
+        
+        debug_log("hashId:"+hashId+" mods:"+mods+" key:"+key+" keyCode:"+keyCode+"<br/>");
         
         if (IS_KILLING) {
             ignoreKeys = ["", "\x00", "k"];
@@ -148,7 +190,7 @@ var handlerMixin = {
                 exports.searchStore.current = "";
                 
                 debug_log("SEARCH END");
-                if (hashId == 1 && key == "g") {
+                if (mods == "c-" && key == "g") {
                     debug_log("CLEAR SEARCH TEXT");
                     if (lastPosition) {
                         debug_log("RESTORE POSITION");
@@ -204,18 +246,17 @@ var addBindings = function(handler) {
             var options = exports.searchStore;
             options.backwards = (dir === "backward");
 
-            if (options.current != "")
+            if (options.current !== "")
                 IS_SEARCHING = true;
             if (IS_SEARCHING) {
-                debug_log("SEARCH REPEAT");
-                var options = exports.searchStore;
                 options.start = null;
-                if (options.current == "") options.current = options.previous;
-                execFind(options);
+                if (options.current === "")
+                    options.current = options.previous;
+                if (options.current !== "")
+                    execFind(options);
             }
             else {
-                debug_log("SEARCH START");
-//                c9console.log("I-search:<br/>");
+                flashStatus("I-search: ");
                 lastPosition = ed.getCursorPosition();
                 ed.selection.setSelectionRange(ed.selection.getRange(), !options.backwards);
                 IS_SEARCHING = true;
@@ -244,10 +285,20 @@ var addBindings = function(handler) {
             editor.session.remove(range);
             editor.clearSelection();
         },
+        setMark: function(editor) {
+            flashStatus("Set Mark");
+            markPosition = editor.getCursorPosition();
+        },
+        exchangePointAndMark: function(editor) {
+            var _point = editor.getCursorPosition();
+            editor.moveCursorToPosition(markPosition);
+            markPosition = _point;
+        },
         noop: function(editor) {}
     });
     
     handler.bindKeys({
+        "c-x c-x" : "exchangePointAndMark",
         "c-s" : {command: "isearch", args: "forward"},
         "c-r" : {command: "isearch", args: "backward"},
         "c-x s" : "save",
@@ -255,7 +306,9 @@ var addBindings = function(handler) {
         "c-x c-w" : "saveas",
         "c-x c-b" : "listEditors",
         "c-x b" : "prevEditor",
-        "c-space" : "complete"
+        "c-space" : "setMark",
+        "s-c-space" : "complete",
+        "m-/" : "complete",
     });
 }
 
@@ -266,7 +319,6 @@ var _loadKeyboardHandler = function(path, callback) {
     } catch (e) {};
     if (module)
         return callback(module);
-
 
     fetch(function() {
         require([path], callback);
@@ -332,7 +384,7 @@ module.exports = ext.register("ext/emacs/emacs", {
     name  : "Emacs mode",
     dev   : "tksnt",
     type  : ext.GENERAL,
-    deps  : [editors, code, settings, extmgr, save, tabbehaviors, quicksearch],
+    deps  : [editors, code, settings, extmgr, save, tabbehaviors, quicksearch, statusbar],
     nodes : [],
     alone : true,
     
@@ -353,6 +405,7 @@ module.exports = ext.register("ext/emacs/emacs", {
         });
 
         settings.addSettings("Code Editor", markupSettings);
+        _mixin(statusbar, statusbarMixin);
 
         var tryEnabling = function () {
             if (settings.model) {
