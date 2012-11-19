@@ -10,6 +10,8 @@ Additional Features
 + Switch to previous opened tab. (Ctrl-x b)
 + Quicksave. (Ctrl-x s, Ctrl-x Ctrl-s)
 + Save as... (Ctrl-x Ctrl-w)
++ Set Mark. (Ctrl-Space)
++ Exchange point and mark. (Ctrl-x Ctrl-x)
 
 Changes
 -------
@@ -17,7 +19,8 @@ Changes
 + `keyboard-quit` (Ctrl-g) cancels current incremental search.
 + `kill-line` (Ctrl-k) kills to the end of line.
 + Continuous `kill-line` appends killed text to the recent kill-ring item.
-+ Ctrl-Space bind to `complete`.
++ Shift-Ctrl-Space bind to `complete`.
++ `kill-region` (Ctrl-w) kills to current marked position.
 
 Installation
 ------------
@@ -62,15 +65,16 @@ C: Ctrl, S: Shift, M: Meta
 + C-x u : `undo`
 + C-x C-s : `save-buffer`
 + C-x C-w : `write-file`
++ S-C-Space : `autocomplete`
 + S-C-z : `redo`
 + M-w : `kill-ring-save`
 + M-v : `scroll-down`
++ M-/ : `autocomplete`
 
 TODO
 ----
 
++ Sync to QuickSearch dialog.
 + Add `yank-pop`. (Meta-y)
 + Add `list-buffers`. (Ctrl-x Ctrl-b)
-+ Add `set-mark-command`. (Ctrl-@)
-+ Add `exchange-point-and-mark`. (Ctrl-x Ctrl-x)
 + Add `find-file`. (Ctrl-x Ctrl-f)
