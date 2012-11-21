@@ -452,6 +452,10 @@ var _disableEmacs = function() {
     EMACS_ENABLED = false;
 };
 
+var _trackTab = function(data) {
+    previousPage = data.previousPage;
+};
+
 module.exports = ext.register("ext/emacs/emacs", {
     name  : "Emacs mode",
     dev   : "tksnt",
@@ -497,7 +501,7 @@ module.exports = ext.register("ext/emacs/emacs", {
         ide.addEventListener("init.ext/code/code", tryEnabling);
         
         // Hook for tab tracking
-        ide.addEventListener("tab.beforeswitch", function(data) { previousPage = data.previousPage; } );
+        ide.addEventListener("tab.beforeswitch", _trackTab);
     },
     
     init : function(){
@@ -526,6 +530,7 @@ module.exports = ext.register("ext/emacs/emacs", {
     },
 
     destroy : function(){
+        ide.removeEventListener("tab.beforeswitch", _trackTab);
         this.nodes.each(function(item){
             item.destroy(true, true);
         });
