@@ -279,7 +279,6 @@ var addBindings = function(handler) {
         },
         listEditors : function(editor) {
             gotofile.toggleDialog();
-            gotofile.filter("", false, true);
         },
         prevEditor : function(editor) {
             var pages = tabEditors.getPages();
