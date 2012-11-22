@@ -10,7 +10,6 @@ var menus = require("ext/menus/menus");
 var extmgr = require("ext/extmgr/extmgr");
 var save = require("ext/save/save");
 var tabbehaviors = require("ext/tabbehaviors/tabbehaviors");
-var quicksearch = require("ext/quicksearch/quicksearch");
 var Search = require("ace/search").Search;
 var Keys = require("ace/lib/keys");
 var statusbar = require("ext/statusbar/statusbar");
@@ -425,9 +424,15 @@ var _enableEmacs = function() {
             IS_LOADING = true;
             
             _loadKeyboardHandler("ace/keyboard/emacs", function(module) {
-                aceEmacs = module;
+                aceEmacs = Object.create(module);
+                aceEmacs.killRing = Object.create(module.killRing);
+                aceEmacs.handler  = Object.create(module.handler);
                 _mixin(aceEmacs.killRing, killRingMixin);
                 _mixin(aceEmacs.handler, handlerMixin);
+                
+                if (module.handler.handleKeyboard_) {
+                    c9console.log("TESTTEST");
+                }
                 
                 emacsHandler = aceEmacs.handler;
                 editor.setKeyboardHandler(emacsHandler);
@@ -460,7 +465,7 @@ module.exports = ext.register("ext/emacs/emacs", {
     name  : "Emacs mode",
     dev   : "tksnt",
     type  : ext.GENERAL,
-    deps  : [editors, code, settings, extmgr, save, tabbehaviors, quicksearch, statusbar, gotofile],
+    deps  : [editors, code, settings, extmgr, save, tabbehaviors, statusbar, gotofile],
     nodes : [],
     alone : true,
     
